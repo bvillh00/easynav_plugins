@@ -1,0 +1,9 @@
+<class_libraries>
+  <library path="easynav_gridmap_localizer">
+    <class name="easynav_gridmap_localizer/AMCLLocalizer"  type="easynav::gridmap::AMCLLocalizer" base_class_type="easynav::LocalizerMethodBase">
+      <description>
+      A gridmap implementation for the AMCL localizer.
+      </description>
+    </class>
+  </library>
+</class_libraries>
