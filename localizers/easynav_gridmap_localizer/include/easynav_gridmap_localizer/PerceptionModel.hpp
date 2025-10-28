@@ -26,8 +26,6 @@
 
 namespace easynav
 {
-namespace gridmap
-{
 
 class PerceptionModel
 {
@@ -37,8 +35,6 @@ public:
   virtual void update(NavState & nav_state) = 0;
   virtual bool hit(tf2::Vector3 & pt) = 0;
 };
-
-}  // namespace navmap
 
 }  // namespace easynav
 #endif  // EASYNAV_GRIDMAP_LOCALIZER__PERCEPTIONMODEL_HPP_

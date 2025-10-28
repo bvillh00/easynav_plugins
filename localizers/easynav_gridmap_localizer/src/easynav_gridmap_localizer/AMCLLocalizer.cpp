@@ -51,7 +51,8 @@
 
 namespace easynav
 {
-namespace navmap
+
+namespace gridmap
 {
 
 static constexpr unsigned char NO_INFORMATION = 255;
@@ -529,8 +530,8 @@ void AMCLLocalizer::predict(NavState & nav_state)
   if (compute_odom_from_tf_) {update_odom_from_tf();}
 
   tf2::Transform delta = last_odom_.inverseTimes(odom_);
-  const bool have_navmap = nav_state.has("map.navmap");
-  if (have_navmap) {navmap_ = nav_state.get<::navmap::NavMap>("map.navmap");}
+  const bool have_gridmap = nav_state.has("map.gridmap");
+  if (have_gridmap) {gridmap_ = nav_state.get<grid_map::GridMap>("map.gridmap");}
 
   const auto imu_q_opt = get_latest_imu_quat(nav_state);
 
@@ -555,42 +556,53 @@ void AMCLLocalizer::predict(NavState & nav_state)
     tf2::Quaternion noisy_q; noisy_q.setRPY(0.0, 0.0, noisy_y);
     p.pose = p.pose * tf2::Transform(noisy_q, noisy_t);
 
-    if (have_navmap) {
-      ::navmap::NavMap::LocateOpts opts;
-      if (p.last_cid != std::numeric_limits<uint32_t>::max()) {
-        opts.hint_cid = p.last_cid; opts.hint_surface = p.last_surface;
+    if (have_gridmap) {
+
+      if (!gridmap_.exists(elevation_layer_)) {
+        //-- No elevation layer: we cannot adjust Z; if there is IMU, align orientation
+        if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
+        continue;
       }
-      opts.planar_eps = 1e-4f; opts.height_eps = 0.50f; opts.use_downward_ray = true;
-
+    
       tf2::Vector3 Pw = p.pose.getOrigin();
-      std::size_t sidx = 0; ::navmap::NavCelId cid = std::numeric_limits<uint32_t>::max();
-      Eigen::Vector3f bary, hit_eig;
+      ::grid_map::Position pos(Pw.x(), Pw.y());
+      
+      //-- Check limit respect of position Grid Map
+      if (!gridmap_.isInside(pos)) {
+          p.last_index = ::grid_map::Index(-1, -1);
+          if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
+              continue;
+      }
 
-      const bool ok = navmap_.locate_navcel(
-        Eigen::Vector3f(static_cast<float>(Pw.x()), static_cast<float>(Pw.y()),
-            static_cast<float>(Pw.z() + 0.5f)),
-        sidx, cid, bary, &hit_eig, opts);
+      //-- Position index (i,j) respect of down cell (x,y)
+      ::grid_map::Index idx;
+      const bool got_idx = gridmap_.getIndex(pos, idx);
+      if (!got_idx) {
+        p.last_index = grid_map::Index(-1, -1);
+        if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
+        continue;
+      }
+
+      float z_elev = gridmap_.atPosition(elevation_layer_, pos,::grid_map::InterpolationMethods::INTER_NEAREST);
+
+      const bool ok = std::isfinite(z_elev);
 
       if (ok) {
-        tf2::Vector3 hit = to_tf(hit_eig);
-        p.pose.setOrigin(tf2::Vector3(Pw.x(), Pw.y(), hit.z()));
+        const double z_corr = static_cast<double>(z_elev) + 0.5f; 
+        p.pose.setOrigin(tf2::Vector3(Pw.x(), Pw.y(), z_corr));
+
         if (imu_q_opt.has_value()) {
           p.pose.setRotation(*imu_q_opt);
-        } else {
-          const auto & cel = navmap_.navcels[cid];
-          tf2::Vector3 n_world = to_tf(cel.normal);
-          double nlen = n_world.length();
-          if (nlen > 1e-9) {
-            n_world /= nlen;
-            double rr, pp, yy; tf2::Matrix3x3(p.pose.getRotation()).getRPY(rr, pp, yy);
-            p.pose.setRotation(frame_from_normal_and_yaw(n_world, yy));
+        }else{
+          ::grid_map::Index idx;
+          if (gridmap_.getIndex(pos, idx)) {
+            p.last_index     = idx;  
+            p.last_elevation = z_elev;             
           }
         }
-        p.last_cid = cid; p.last_surface = sidx;
-      } else {
-        p.pose.setOrigin(tf2::Vector3(Pw.x(), Pw.y(), Pw.z()));
-        if (imu_q_opt.has_value()) {p.pose.setRotation(*imu_q_opt);}
-      }
+
+      }else {
+      if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
     }
   }
 
@@ -600,6 +612,7 @@ void AMCLLocalizer::predict(NavState & nav_state)
   tf2::Transform map2odom = map2bf * odom_.inverse();
   publishTF(map2odom);
   publishEstimatedPose(map2bf);
+}
 }
 
 // ---------- perception scoring helpers ----------
@@ -1081,9 +1094,8 @@ nav_msgs::msg::Odometry AMCLLocalizer::get_pose()
   odom_msg.twist.twist.angular.z = 0.0;
   return odom_msg;
 }
-
-}  // namespace navmap
+} //namespace gridmap
 }  // namespace easynav
 
 #include <pluginlib/class_list_macros.hpp>
-PLUGINLIB_EXPORT_CLASS(easynav::navmap::AMCLLocalizer, easynav::LocalizerMethodBase)
+PLUGINLIB_EXPORT_CLASS(easynav::gridmap::AMCLLocalizer, easynav::LocalizerMethodBase)

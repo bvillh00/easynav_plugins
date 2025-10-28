@@ -46,6 +46,8 @@
 namespace easynav
 {
 
+namespace gridmap
+{
 
 /// \brief Structure representing a single particle in the AMCL algorithm.
 struct Particle
@@ -55,7 +57,7 @@ struct Particle
   float possible_hits;        ///< Maximum number of possible hits.
   double weight;            ///< Normalized importance weight of the particle.
 
-  grid_map::Index last_index = grid_map::Index(-1,-1); ///< Initialise the index to (-1, -1) as a sentinel value
+  ::grid_map::Index last_index = ::grid_map::Index(-1,-1); ///< Initialise the index to (-1, -1) as a sentinel value
   float last_elevation = std::numeric_limits<float>::quiet_NaN(); ///< last height value (Z) of the Grid Map
   tf2::Vector3 last_normal = {0.0, 0.0, 1.0}; ///< Last surface normal; (0,0,1)
   
@@ -241,11 +243,14 @@ protected:
   std::shared_ptr<Bonxai::ProbabilisticMap> bonxai_map_;
 
   //GridMap
-  std::shared_ptr<grid_map::GridMap> gridmap_;
+  ::grid_map::GridMap gridmap_;
+  std::string elevation_layer_ = "elevation";
 
   // PerceptionModel percepcion_model_;
 
-};  // namespace navmap
+};
+
+}
 
 }  // namespace easynav
 #endif  // EASYNAV_GRIDMAP_LOCALIZER__AMCLLOCALIZER_HPP_

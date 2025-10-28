@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(easynav_navmap_localizer)
+project(easynav_gridmap_localizer)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -26,7 +26,7 @@ find_package(nav_msgs REQUIRED)
 
 
 add_library(${PROJECT_NAME} SHARED
-  src/easynav_navmap_localizer/AMCLLocalizer.cpp
+  src/easynav_gridmap_localizer/AMCLLocalizer.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -75,7 +75,7 @@ ament_export_libraries(${PROJECT_NAME})
 ament_export_targets(export_${PROJECT_NAME})
 
 # Register the planning plugins
-pluginlib_export_plugin_description_file(easynav_core easynav_navmap_localizer_plugins.xml)
+pluginlib_export_plugin_description_file(easynav_core easynav_gridmap_localizer_plugins.xml)
 
 ament_export_dependencies(
   easynav_common
