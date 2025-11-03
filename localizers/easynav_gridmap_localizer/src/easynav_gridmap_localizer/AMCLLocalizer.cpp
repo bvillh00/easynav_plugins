@@ -526,18 +526,57 @@ void AMCLLocalizer::update(NavState & nav_state)
 
 void AMCLLocalizer::predict(NavState & nav_state)
 {
-  if (!initialized_odom_) {if (compute_odom_from_tf_) {update_odom_from_tf();} return;}
-  if (compute_odom_from_tf_) {update_odom_from_tf();}
+  if (!initialized_odom_) { if (compute_odom_from_tf_) { update_odom_from_tf(); } return; }
+  if (compute_odom_from_tf_) { update_odom_from_tf(); }
 
   tf2::Transform delta = last_odom_.inverseTimes(odom_);
-  const bool have_gridmap = nav_state.has("map.gridmap");
-  if (have_gridmap) {gridmap_ = nav_state.get<grid_map::GridMap>("map.gridmap");}
+  const bool have_gridmap = nav_state.has("map");
+  if (have_gridmap) {
+    gridmap_ = nav_state.get<grid_map::GridMap>("map");
+  }
 
   const auto imu_q_opt = get_latest_imu_quat(nav_state);
 
+  auto gridpmap_pos = gridmap_.getPosition();
+
+  //pose_ = pose_ * delta;
+
+  if (have_gridmap && gridmap_.exists(elevation_layer_)) {
+
+    const auto gm_pos = gridmap_.getPosition();   
+    const auto gm_len = gridmap_.getLength();     
+    const double gm_res = gridmap_.getResolution();
+    const double xmin = gm_pos.x() - gm_len.x()*0.5;
+    const double xmax = gm_pos.x() + gm_len.x()*0.5;
+    const double ymin = gm_pos.y() - gm_len.y()*0.5;
+    const double ymax = gm_pos.y() + gm_len.y()*0.5;
+
+    RCLCPP_INFO(
+      get_node()->get_logger(),
+      "[Grid Map] res=%.2f len=(%.1f,%.1f) center=(%.3f,%.3f) AABB[x:(%.3f..%.3f), y:(%.3f..%.3f)]",
+      gm_res, gm_len.x(), gm_len.y(), gm_pos.x(), gm_pos.y(),
+      xmin, xmax, ymin, ymax);
+     
+    const tf2::Vector3 Pg = pose_.getOrigin();
+    ::grid_map::Position pos_g(Pg.x(), Pg.y());
+    //pos_g = pos_g + gridpmap_pos;
+
+    if (gridmap_.isInside(pos_g)) {
+      float z_elev_g = gridmap_.atPosition(
+        elevation_layer_, pos_g);
+      if (std::isfinite(z_elev_g)) {
+        const double z_corr_g = static_cast<double>(z_elev_g);
+        pose_.setOrigin(tf2::Vector3(Pg.x(), Pg.y(), z_corr_g));
+        if (imu_q_opt.has_value()) {
+          pose_.setRotation(*imu_q_opt);
+        }
+      }
+    }
+  }
+
   tf2::Vector3 t = delta.getOrigin();
   double dx = t.x(), dy = t.y(), dz = t.z();
-  double trans_len = std::sqrt(dx * dx + dy * dy + dz * dz);
+  double trans_len = std::sqrt(dx*dx + dy*dy + dz*dz);
 
   double r, p, yaw; tf2::Matrix3x3(delta.getRotation()).getRPY(r, p, yaw);
   double rot_len = std::abs(yaw);
@@ -548,64 +587,45 @@ void AMCLLocalizer::predict(NavState & nav_state)
     std::normal_distribution<double> n_dx(0.0, std::abs(dx) * noise_translation_);
     std::normal_distribution<double> n_dy(0.0, std::abs(dy) * noise_translation_);
     std::normal_distribution<double> n_dz(0.0, std::abs(dz) * noise_translation_);
-    std::normal_distribution<double> n_yaw(0.0,
-      rot_len * noise_rotation_ + trans_len * noise_translation_to_rotation_);
+    std::normal_distribution<double> n_yaw(
+      0.0, rot_len * noise_rotation_ + trans_len * noise_translation_to_rotation_);
 
-    tf2::Vector3 noisy_t(dx + n_dx(gen), dy + n_dy(gen), dz + n_dz(gen));
-    double noisy_y = yaw + n_yaw(gen);
+    const tf2::Vector3 noisy_t(dx + n_dx(gen), dy + n_dy(gen), dz + n_dz(gen));
+    const double noisy_y = yaw + n_yaw(gen);
     tf2::Quaternion noisy_q; noisy_q.setRPY(0.0, 0.0, noisy_y);
+
     p.pose = p.pose * tf2::Transform(noisy_q, noisy_t);
 
-    if (have_gridmap) {
+    if (have_gridmap && gridmap_.exists(elevation_layer_)) {
 
-      if (!gridmap_.exists(elevation_layer_)) {
-        //-- No elevation layer: we cannot adjust Z; if there is IMU, align orientation
-        if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
-        continue;
-      }
-    
-      tf2::Vector3 Pw = p.pose.getOrigin();
+      const tf2::Vector3 Pw = p.pose.getOrigin();
       ::grid_map::Position pos(Pw.x(), Pw.y());
-      
-      //-- Check limit respect of position Grid Map
-      if (!gridmap_.isInside(pos)) {
-          p.last_index = ::grid_map::Index(-1, -1);
-          if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
-              continue;
-      }
+      //pos = pos + gridpmap_pos;
 
-      //-- Position index (i,j) respect of down cell (x,y)
-      ::grid_map::Index idx;
-      const bool got_idx = gridmap_.getIndex(pos, idx);
-      if (!got_idx) {
-        p.last_index = grid_map::Index(-1, -1);
-        if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
-        continue;
-      }
+      if (gridmap_.isInside(pos)) {
+        float z_elev = gridmap_.atPosition(
+          elevation_layer_, pos);
+        if (std::isfinite(z_elev)) {
+          const double z_corr = static_cast<double>(z_elev);
+          p.pose.setOrigin(tf2::Vector3(Pw.x(), Pw.y(), z_corr));
 
-      float z_elev = gridmap_.atPosition(elevation_layer_, pos,::grid_map::InterpolationMethods::INTER_NEAREST);
+          if (imu_q_opt.has_value()) {
+            p.pose.setRotation(*imu_q_opt);
+          }
 
-      const bool ok = std::isfinite(z_elev);
-
-      if (ok) {
-        const double z_corr = static_cast<double>(z_elev) + 0.5f; 
-        p.pose.setOrigin(tf2::Vector3(Pw.x(), Pw.y(), z_corr));
-
-        if (imu_q_opt.has_value()) {
-          p.pose.setRotation(*imu_q_opt);
-        }else{
           ::grid_map::Index idx;
           if (gridmap_.getIndex(pos, idx)) {
-            p.last_index     = idx;  
-            p.last_elevation = z_elev;             
+            p.last_index = idx;
+            p.last_elevation = z_elev;
           }
+        } else {
+          if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
         }
-
-      }else {
-      if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
+      } else {
+        if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
+      }
     }
   }
-
   last_odom_ = odom_;
   pose_ = getEstimatedPose();
   tf2::Transform map2bf = pose_;
@@ -613,7 +633,7 @@ void AMCLLocalizer::predict(NavState & nav_state)
   publishTF(map2odom);
   publishEstimatedPose(map2bf);
 }
-}
+
 
 // ---------- perception scoring helpers ----------
 struct SensorBundle
