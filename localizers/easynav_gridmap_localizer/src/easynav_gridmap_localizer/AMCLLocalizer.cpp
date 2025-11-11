@@ -526,7 +526,10 @@ void AMCLLocalizer::update(NavState & nav_state)
 
 void AMCLLocalizer::predict(NavState & nav_state)
 {
-  if (!initialized_odom_) { if (compute_odom_from_tf_) { update_odom_from_tf(); } return; }
+  if (!initialized_odom_) { 
+    if (compute_odom_from_tf_) { update_odom_from_tf(); } 
+    return; 
+  }
   if (compute_odom_from_tf_) { update_odom_from_tf(); }
 
   tf2::Transform delta = last_odom_.inverseTimes(odom_);
@@ -536,52 +539,32 @@ void AMCLLocalizer::predict(NavState & nav_state)
   }
 
   const auto imu_q_opt = get_latest_imu_quat(nav_state);
-
   auto gridpmap_pos = gridmap_.getPosition();
 
-  //pose_ = pose_ * delta;
-
-  if (have_gridmap && gridmap_.exists(elevation_layer_)) {
-
-    const auto gm_pos = gridmap_.getPosition();   
-    const auto gm_len = gridmap_.getLength();     
-    const double gm_res = gridmap_.getResolution();
-    const double xmin = gm_pos.x() - gm_len.x()*0.5;
-    const double xmax = gm_pos.x() + gm_len.x()*0.5;
-    const double ymin = gm_pos.y() - gm_len.y()*0.5;
-    const double ymax = gm_pos.y() + gm_len.y()*0.5;
-
-    RCLCPP_INFO(
-      get_node()->get_logger(),
-      "[Grid Map] res=%.2f len=(%.1f,%.1f) center=(%.3f,%.3f) AABB[x:(%.3f..%.3f), y:(%.3f..%.3f)]",
-      gm_res, gm_len.x(), gm_len.y(), gm_pos.x(), gm_pos.y(),
-      xmin, xmax, ymin, ymax);
-     
-    const tf2::Vector3 Pg = pose_.getOrigin();
-    ::grid_map::Position pos_g(Pg.x(), Pg.y());
-    //pos_g = pos_g + gridpmap_pos;
-
-    if (gridmap_.isInside(pos_g)) {
-      float z_elev_g = gridmap_.atPosition(
-        elevation_layer_, pos_g);
-      if (std::isfinite(z_elev_g)) {
-        const double z_corr_g = static_cast<double>(z_elev_g);
-        pose_.setOrigin(tf2::Vector3(Pg.x(), Pg.y(), z_corr_g));
-        if (imu_q_opt.has_value()) {
-          pose_.setRotation(*imu_q_opt);
-        }
-      }
-    }
-  }
+  // DEBUG: Información del GridMap
+  RCLCPP_INFO(get_node()->get_logger(), "=== GRIDMAP DEBUG ===");
+  RCLCPP_INFO(get_node()->get_logger(), "GridMap center: (%.3f, %.3f)", 
+              gridpmap_pos.x(), gridpmap_pos.y());
+  RCLCPP_INFO(get_node()->get_logger(), "GridMap size: %.1f x %.1f m", 
+              gridmap_.getLength().x(), gridmap_.getLength().y());
+  RCLCPP_INFO(get_node()->get_logger(), "GridMap resolution: %.3f m/cell", 
+              gridmap_.getResolution());
 
   tf2::Vector3 t = delta.getOrigin();
   double dx = t.x(), dy = t.y(), dz = t.z();
   double trans_len = std::sqrt(dx*dx + dy*dy + dz*dz);
 
-  double r, p, yaw; tf2::Matrix3x3(delta.getRotation()).getRPY(r, p, yaw);
+  double r, p, yaw; 
+  tf2::Matrix3x3(delta.getRotation()).getRPY(r, p, yaw);
   double rot_len = std::abs(yaw);
 
-  std::random_device rd; std::mt19937 gen(rd());
+  std::random_device rd; 
+  std::mt19937 gen(rd());
+
+  // Contadores para estadisticas
+  int particles_inside = 0;
+  int particles_with_valid_elevation = 0;
+  int total_particles = particles_.size();
 
   for (auto & p : particles_) {
     std::normal_distribution<double> n_dx(0.0, std::abs(dx) * noise_translation_);
@@ -592,42 +575,95 @@ void AMCLLocalizer::predict(NavState & nav_state)
 
     const tf2::Vector3 noisy_t(dx + n_dx(gen), dy + n_dy(gen), dz + n_dz(gen));
     const double noisy_y = yaw + n_yaw(gen);
-    tf2::Quaternion noisy_q; noisy_q.setRPY(0.0, 0.0, noisy_y);
+    tf2::Quaternion noisy_q; 
+    noisy_q.setRPY(0.0, 0.0, noisy_y);
 
     p.pose = p.pose * tf2::Transform(noisy_q, noisy_t);
 
-    if (have_gridmap && gridmap_.exists(elevation_layer_)) {
+    // Posicion ANTES del GridMap
+    const tf2::Vector3 Pw_before = p.pose.getOrigin();
+    RCLCPP_INFO(get_node()->get_logger(), 
+                 "Particle %ld - Before GridMap: (%.3f, %.3f, %.3f)", 
+                 &p - &particles_[0], Pw_before.x(), Pw_before.y(), Pw_before.z());
 
+    if (have_gridmap && gridmap_.exists(elevation_layer_)) {
       const tf2::Vector3 Pw = p.pose.getOrigin();
-      ::grid_map::Position pos(Pw.x(), Pw.y());
-      //pos = pos + gridpmap_pos;
+      
+      // Conversion de coordenadas
+      ::grid_map::Position pos(Pw.x() + gridpmap_pos.x(), Pw.y() + gridpmap_pos.y());
+      RCLCPP_INFO(get_node()->get_logger(), 
+                   "Particle %ld - World: (%.3f, %.3f) -> GridMap: (%.3f, %.3f)", 
+                   &p - &particles_[0], Pw.x(), Pw.y(), pos.x(), pos.y());
 
       if (gridmap_.isInside(pos)) {
-        float z_elev = gridmap_.atPosition(
-          elevation_layer_, pos);
-        if (std::isfinite(z_elev)) {
-          const double z_corr = static_cast<double>(z_elev);
-          p.pose.setOrigin(tf2::Vector3(Pw.x(), Pw.y(), z_corr));
+        particles_inside++;
+        
+        try {
+          float z_elev = gridmap_.atPosition(elevation_layer_, pos);
+          RCLCPP_INFO(get_node()->get_logger(), 
+                       "Particle %ld - Elevation: %.3f (finite: %d)", 
+                       &p - &particles_[0], z_elev, std::isfinite(z_elev));
+          
+          if (std::isfinite(z_elev)) {
+            particles_with_valid_elevation++;
+            const double z_corr = static_cast<double>(z_elev);
+            
+            // DEBUG: Correccion aplicada
+            RCLCPP_INFO(get_node()->get_logger(), 
+                         "Particle %ld - Corrected Z: %.3f -> %.3f", 
+                         &p - &particles_[0], Pw.z(), z_corr);
+            
+            p.pose.setOrigin(tf2::Vector3(Pw.x(), Pw.y(), z_corr));
 
-          if (imu_q_opt.has_value()) {
-            p.pose.setRotation(*imu_q_opt);
-          }
+            if (imu_q_opt.has_value()) {
+              p.pose.setRotation(*imu_q_opt);
+            }
 
-          ::grid_map::Index idx;
-          if (gridmap_.getIndex(pos, idx)) {
-            p.last_index = idx;
-            p.last_elevation = z_elev;
+            ::grid_map::Index idx;
+            if (gridmap_.getIndex(pos, idx)) {
+              p.last_index = idx;
+              p.last_elevation = z_elev;
+            }
+          } else {
+            if (imu_q_opt.has_value()) { 
+              p.pose.setRotation(*imu_q_opt); 
+            }
+            RCLCPP_INFO(get_node()->get_logger(), 
+                         "Particle %ld - Invalid elevation (NaN/inf)", 
+                         &p - &particles_[0]);
           }
-        } else {
-          if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
+        } catch (const std::exception& e) {
+          RCLCPP_INFO(get_node()->get_logger(), 
+                      "Particle %ld - Exception: %s", 
+                      &p - &particles_[0], e.what());
         }
       } else {
-        if (imu_q_opt.has_value()) { p.pose.setRotation(*imu_q_opt); }
+        if (imu_q_opt.has_value()) { 
+          p.pose.setRotation(*imu_q_opt); 
+        }
+        RCLCPP_INFO(get_node()->get_logger(), 
+                     "Particle %ld - Outside GridMap bounds", 
+                     &p - &particles_[0]);
       }
     }
   }
+
+  // DEBUG: Estadisticas finales
+  RCLCPP_INFO(get_node()->get_logger(), "=== PARTICLE STATISTICS ===");
+  RCLCPP_INFO(get_node()->get_logger(), "Total particles: %d", total_particles);
+  RCLCPP_INFO(get_node()->get_logger(), "Inside GridMap: %d", particles_inside);
+  RCLCPP_INFO(get_node()->get_logger(), "With valid elevation: %d", particles_with_valid_elevation);
+  RCLCPP_INFO(get_node()->get_logger(), "Success rate: %.1f%%", 
+              (particles_with_valid_elevation * 100.0) / total_particles);
+
   last_odom_ = odom_;
   pose_ = getEstimatedPose();
+  
+  // DEBUG: Pose estimada final
+  tf2::Vector3 final_pose = pose_.getOrigin();
+  RCLCPP_INFO(get_node()->get_logger(), "Final estimated pose: (%.3f, %.3f, %.3f)", 
+              final_pose.x(), final_pose.y(), final_pose.z());
+  
   tf2::Transform map2bf = pose_;
   tf2::Transform map2odom = map2bf * odom_.inverse();
   publishTF(map2odom);
