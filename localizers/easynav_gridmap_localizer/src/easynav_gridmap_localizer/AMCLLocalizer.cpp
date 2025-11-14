@@ -541,7 +541,7 @@ void AMCLLocalizer::predict(NavState & nav_state)
   const auto imu_q_opt = get_latest_imu_quat(nav_state);
   auto gridpmap_pos = gridmap_.getPosition();
 
-  // DEBUG: Información del GridMap
+  // Information respect of GridMap
   RCLCPP_INFO(get_node()->get_logger(), "=== GRIDMAP DEBUG ===");
   RCLCPP_INFO(get_node()->get_logger(), "GridMap center: (%.3f, %.3f)", 
               gridpmap_pos.x(), gridpmap_pos.y());
@@ -561,7 +561,6 @@ void AMCLLocalizer::predict(NavState & nav_state)
   std::random_device rd; 
   std::mt19937 gen(rd());
 
-  // Contadores para estadisticas
   int particles_inside = 0;
   int particles_with_valid_elevation = 0;
   int total_particles = particles_.size();
@@ -580,7 +579,6 @@ void AMCLLocalizer::predict(NavState & nav_state)
 
     p.pose = p.pose * tf2::Transform(noisy_q, noisy_t);
 
-    // Posicion ANTES del GridMap
     const tf2::Vector3 Pw_before = p.pose.getOrigin();
     RCLCPP_INFO(get_node()->get_logger(), 
                  "Particle %ld - Before GridMap: (%.3f, %.3f, %.3f)", 
@@ -589,8 +587,7 @@ void AMCLLocalizer::predict(NavState & nav_state)
     if (have_gridmap && gridmap_.exists(elevation_layer_)) {
       const tf2::Vector3 Pw = p.pose.getOrigin();
       
-      // Conversion de coordenadas
-      ::grid_map::Position pos(Pw.x() + gridpmap_pos.x(), Pw.y() + gridpmap_pos.y());
+      ::grid_map::Position pos(Pw.x(), Pw.y());
       RCLCPP_INFO(get_node()->get_logger(), 
                    "Particle %ld - World: (%.3f, %.3f) -> GridMap: (%.3f, %.3f)", 
                    &p - &particles_[0], Pw.x(), Pw.y(), pos.x(), pos.y());
@@ -599,7 +596,7 @@ void AMCLLocalizer::predict(NavState & nav_state)
         particles_inside++;
         
         try {
-          float z_elev = gridmap_.atPosition(elevation_layer_, pos);
+          float z_elev = gridmap_.atPosition("elevation", pos,::grid_map::InterpolationMethods::INTER_CUBIC_CONVOLUTION);
           RCLCPP_INFO(get_node()->get_logger(), 
                        "Particle %ld - Elevation: %.3f (finite: %d)", 
                        &p - &particles_[0], z_elev, std::isfinite(z_elev));
@@ -608,7 +605,7 @@ void AMCLLocalizer::predict(NavState & nav_state)
             particles_with_valid_elevation++;
             const double z_corr = static_cast<double>(z_elev);
             
-            // DEBUG: Correccion aplicada
+            
             RCLCPP_INFO(get_node()->get_logger(), 
                          "Particle %ld - Corrected Z: %.3f -> %.3f", 
                          &p - &particles_[0], Pw.z(), z_corr);
@@ -648,7 +645,6 @@ void AMCLLocalizer::predict(NavState & nav_state)
     }
   }
 
-  // DEBUG: Estadisticas finales
   RCLCPP_INFO(get_node()->get_logger(), "=== PARTICLE STATISTICS ===");
   RCLCPP_INFO(get_node()->get_logger(), "Total particles: %d", total_particles);
   RCLCPP_INFO(get_node()->get_logger(), "Inside GridMap: %d", particles_inside);
@@ -659,7 +655,6 @@ void AMCLLocalizer::predict(NavState & nav_state)
   last_odom_ = odom_;
   pose_ = getEstimatedPose();
   
-  // DEBUG: Pose estimada final
   tf2::Vector3 final_pose = pose_.getOrigin();
   RCLCPP_INFO(get_node()->get_logger(), "Final estimated pose: (%.3f, %.3f, %.3f)", 
               final_pose.x(), final_pose.y(), final_pose.z());
