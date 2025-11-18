@@ -596,7 +596,7 @@ void AMCLLocalizer::predict(NavState & nav_state)
         particles_inside++;
         
         try {
-          float z_elev = gridmap_.atPosition("elevation", pos,::grid_map::InterpolationMethods::INTER_CUBIC_CONVOLUTION);
+          float z_elev = gridmap_.atPosition("elevation", pos,::grid_map::InterpolationMethods::INTER_LINEAR);
           RCLCPP_INFO(get_node()->get_logger(), 
                        "Particle %ld - Elevation: %.3f (finite: %d)", 
                        &p - &particles_[0], z_elev, std::isfinite(z_elev));
@@ -616,11 +616,13 @@ void AMCLLocalizer::predict(NavState & nav_state)
               p.pose.setRotation(*imu_q_opt);
             }
 
+            
             ::grid_map::Index idx;
             if (gridmap_.getIndex(pos, idx)) {
               p.last_index = idx;
-              p.last_elevation = z_elev;
+              p.last_elevation = z_corr;
             }
+            
           } else {
             if (imu_q_opt.has_value()) { 
               p.pose.setRotation(*imu_q_opt); 
@@ -635,6 +637,7 @@ void AMCLLocalizer::predict(NavState & nav_state)
                       &p - &particles_[0], e.what());
         }
       } else {
+        p.pose.setOrigin(tf2::Vector3(Pw.x(), Pw.y(), Pw.z()));
         if (imu_q_opt.has_value()) { 
           p.pose.setRotation(*imu_q_opt); 
         }
