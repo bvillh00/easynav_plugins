@@ -544,9 +544,9 @@ void AMCLLocalizer::predict(NavState & nav_state)
   // Information respect of GridMap
   RCLCPP_INFO(get_node()->get_logger(), "=== GRIDMAP DEBUG ===");
   RCLCPP_INFO(get_node()->get_logger(), "GridMap center: (%.3f, %.3f)", 
-              gridpmap_pos.x(), gridpmap_pos.y());
+          gridpmap_pos.x(), gridpmap_pos.y());
   RCLCPP_INFO(get_node()->get_logger(), "GridMap size: %.1f x %.1f m", 
-              gridmap_.getLength().x(), gridmap_.getLength().y());
+          gridmap_.getLength().x(), gridmap_.getLength().y());
   RCLCPP_INFO(get_node()->get_logger(), "GridMap resolution: %.3f m/cell", 
               gridmap_.getResolution());
 
@@ -614,27 +614,30 @@ void AMCLLocalizer::predict(NavState & nav_state)
 
             if (imu_q_opt.has_value()) {
               p.pose.setRotation(*imu_q_opt);
+              RCLCPP_INFO(get_node()->get_logger(),"Imu correction");
             }
 
-            
-            ::grid_map::Index idx;
-            if (gridmap_.getIndex(pos, idx)) {
-              p.last_index = idx;
-              p.last_elevation = z_corr;
+            else{
+              ::grid_map::Index idx;
+              if (gridmap_.getIndex(pos, idx)) {
+                p.last_index = idx;
+                p.last_elevation = z_corr;
+              }
             }
+            
             
           } else {
             if (imu_q_opt.has_value()) { 
               p.pose.setRotation(*imu_q_opt); 
             }
-            RCLCPP_INFO(get_node()->get_logger(), 
-                         "Particle %ld - Invalid elevation (NaN/inf)", 
-                         &p - &particles_[0]);
+            //RCLCPP_INFO(get_node()->get_logger(), 
+            //             "Particle %ld - Invalid elevation (NaN/inf)", 
+            //             &p - &particles_[0]);
           }
         } catch (const std::exception& e) {
-          RCLCPP_INFO(get_node()->get_logger(), 
-                      "Particle %ld - Exception: %s", 
-                      &p - &particles_[0], e.what());
+          //RCLCPP_INFO(get_node()->get_logger(), 
+          //            "Particle %ld - Exception: %s", 
+          //            &p - &particles_[0], e.what());
         }
       } else {
         p.pose.setOrigin(tf2::Vector3(Pw.x(), Pw.y(), Pw.z()));
